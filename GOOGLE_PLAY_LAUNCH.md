@@ -1,105 +1,180 @@
-# TurnosApp: salida a Google Play
+# Guía Android y Google Play para TurnosApp
 
-## Estado actual
+Esta guía está escrita como si partieras de cero.
 
-El código actual es un prototipo avanzado de interfaz y lógica local.
+## 1. Qué necesitas antes de empezar
 
-Antes de publicar en Google Play hay cuatro piezas que todavía no están listas para producción:
+- una cuenta de Google normal
+- una cuenta de desarrollador de Google Play
+- una cuenta de Expo
+- una cuenta de RevenueCat
+- un proyecto Supabase para TurnosApp
 
-1. Autenticación real y sincronización de datos.
-2. Suscripciones reales con Google Play Billing y RevenueCat.
-3. Publicidad real con AdMob y consentimiento GDPR.
-4. Backend para empresa, compartición y validación de códigos.
+## 2. Prepara el proyecto local
 
-## Arquitectura recomendada
+En la carpeta del proyecto:
 
-1. Migrar este prototipo a Expo/React Native si todavía no está dentro de un proyecto móvil real.
-2. Usar Firebase o Supabase para:
-   - autenticación con Google
-   - base de datos de calendarios
-   - empresas, empleados y cambios de turno
-   - sincronización entre dispositivos
-3. Usar RevenueCat para `premium` y `business`.
-4. Usar `react-native-google-mobile-ads` para banners e interstitials.
+1. copia `.env.example` a `.env`
+2. rellena:
+   - `EXPO_PUBLIC_SUPABASE_URL`
+   - `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+   - `EXPO_PUBLIC_RC_ANDROID_KEY`
+   - los IDs de AdMob
+3. instala dependencias
+4. arranca la app en local
 
-## Checklist técnico
+Comandos:
 
-### 1. Base móvil
+```bash
+npm install
+npm run start
+```
 
-- Crear proyecto Expo con EAS.
-- Mover `TurnosApp.jsx` a una estructura real: `app/`, `components/`, `features/`, `services/`.
-- Añadir `app.json`, `package.json`, icono, splash y permisos.
+## 3. Crea la app en Google Play Console
 
-### 2. Cuentas y datos
+1. entra en Google Play Console
+2. pulsa `Crear aplicación`
+3. nombre: `TurnosApp`
+4. idioma predeterminado: `es-ES`
+5. tipo: `Aplicación`
+6. gratuita o de pago:
+   - si vas a vender suscripciones, puede seguir siendo gratuita
 
-- Añadir login Google real.
-- Guardar calendarios en nube por `userId`.
-- Sincronizar `cfg`, `customShifts`, `company`, `plan` y preferencias.
-- Añadir borrado de cuenta y exportación de datos.
+## 4. Configura las suscripciones
 
-### 3. Monetización
+En Google Play Console:
 
-- Crear productos en Google Play Console:
-  - `turnosapp_premium_monthly`
-  - `turnosapp_premium_annual`
-  - `turnosapp_business_monthly`
-- Crear entitlements equivalentes en RevenueCat.
-- Sustituir el paywall demo por compra/restauración real.
-- Validar plan en backend y no solo en cliente.
+1. ve a `Monetizar > Suscripciones`
+2. crea:
+   - `turnosapp_premium_monthly`
+   - `turnosapp_premium_annual`
+   - `turnosapp_business_monthly`
+3. define precios:
+   - `1,99 €/mes`
+   - `14,99 €/año`
+   - `9,99 €/mes`
 
-### 4. AdMob
+## 5. Configura RevenueCat
 
-- Crear App ID y Ad Unit IDs.
-- Integrar UMP para consentimiento GDPR.
-- Mostrar anuncios solo en `free`.
-- Desactivar anuncios para usuarios con entitlement activo.
+Sigue [REVENUECAT_ANDROID_SETUP.md](/C:/Users/rubbe/Desktop/apps/turnosapp/REVENUECAT_ANDROID_SETUP.md:1).
 
-### 5. Empresa y compartir
+Lo más importante:
 
-- Guardar empresa en backend.
-- Generar códigos de invitación en servidor.
-- Validar unión por código en servidor.
-- Registrar auditoría de cambios de turno.
-- Crear enlaces o tokens de solo lectura para compartir calendario.
+- no uses claves `sk_...` en la app
+- usa la public SDK key de Android `goog_...`
 
-### 6. Calidad y políticas
+## 6. Configura Supabase
 
-- Política de privacidad publicada.
-- Pantalla de eliminar cuenta.
-- Pantalla de restaurar compras.
-- Textos honestos: no prometer sync o pagos si aún son demo.
-- Pruebas en Android real y testers internos de Play Console.
+Sigue [SUPABASE_SETUP.md](/C:/Users/rubbe/Desktop/apps/turnosapp/SUPABASE_SETUP.md:1).
 
-## Publicación en Google Play
+Necesitas al menos:
 
-1. Crear la ficha en Play Console.
-2. Subir `AAB` firmado con EAS Build.
-3. Configurar testers internos.
-4. Probar login, compras, restauración, anuncios, backup y notificaciones.
-5. Completar privacidad, clasificación por edades y seguridad de datos.
-6. Lanzar primero en track interno, luego cerrado, luego producción.
+- auth con Google
+- tablas de calendarios
+- tablas de empresa y miembros
+- solicitudes de cambio
+- enlaces compartidos
+- RLS activa
 
-## Roadmap sugerido
+## 7. Configura AdMob
 
-### MVP publicable
+Ya tienes puestos estos IDs Android:
 
-- Calendario local
-- backup/import completo
-- premium con RevenueCat
-- anuncios AdMob
+- App ID: `ca-app-pub-3485168250647378~1198686158`
+- Banner ID: `ca-app-pub-3485168250647378/6442959343`
+
+Falta:
+
+1. activar consentimiento UMP/GDPR
+2. decidir dónde mostrar banner
+3. ocultar anuncios para `premium` y `business`
+
+## 8. Configura Expo y EAS
+
+Instala EAS CLI:
+
+```bash
+npm install -g eas-cli
+eas login
+```
+
+Inicializa EAS si hace falta:
+
+```bash
+eas init
+```
+
+## 9. Haz la build Android
+
+```bash
+eas build --platform android --profile production
+```
+
+Eso te generará un `.aab`, que es el formato correcto para Google Play.
+
+## 10. Primera subida a Google Play
+
+La primera vez hazla manualmente:
+
+1. abre tu app en Google Play Console
+2. ve a `Versiones > Producción` o mejor `Prueba interna`
+3. crea una release
+4. sube el `.aab`
+5. guarda
+
+## 11. Rellena la ficha de tienda
+
+Necesitarás:
+
+- nombre corto y largo
+- descripción corta
+- descripción completa
+- icono 512x512
+- capturas de pantalla
 - política de privacidad
+- correo de soporte
 
-### V1 comercial
+## 12. Completa formularios obligatorios
 
-- login Google
-- sync nube
-- compartir calendario por enlace
-- widgets y notificaciones reales
+En Play Console tendrás que rellenar:
 
-### V2 empresa
+- seguridad de datos
+- clasificación por edades
+- permisos
+- anuncios
+- contenido de pago y suscripciones
 
-- equipos
-- cambios de turno con aprobación
-- cuadrante compartido
-- roles y permisos
-- panel de métricas por empleado
+## 13. Prueba interna antes de publicar
+
+No lances directo a producción.
+
+Haz antes:
+
+1. `Prueba interna`
+2. probar login
+3. probar sincronización
+4. probar compras
+5. probar restauración
+6. probar anuncios
+7. probar export/import de backup
+8. probar empresa y cambios de turno
+
+## 14. Cuándo pasar a producción
+
+Solo cuando estas piezas sean reales:
+
+- auth real
+- sync real
+- RevenueCat real
+- AdMob real
+- enlaces compartidos reales
+- textos honestos, sin vender funciones demo
+
+## 15. Orden que te recomiendo seguir
+
+1. Supabase
+2. RevenueCat
+3. AdMob
+4. build Android
+5. prueba interna Play Store
+6. producción

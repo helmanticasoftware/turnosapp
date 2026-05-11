@@ -1,24 +1,26 @@
 /**
  * TurnosApp – Código de producción v7
  * ─────────────────────────────────────────────────────────────────────────────
- * ADMOB – Publisher ID: ca-app-pub-3485168250647378
+ * ADMOB Android App ID: ca-app-pub-3485168250647378~1198686158
+ * ADMOB Android Banner: ca-app-pub-3485168250647378/6442959343
  *
  * En la app nativa (React Native / Expo), reemplazar el banner placeholder
  * con el componente real:
  *   import { BannerAd, BannerAdSize } from 'react-native-google-mobile-ads';
- *   <BannerAd unitId="ca-app-pub-3485168250647378~XXXXXXXXXX" size={BannerAdSize.BANNER} />
+ *   <BannerAd unitId="ca-app-pub-3485168250647378/6442959343" size={BannerAdSize.BANNER} />
  *
  * GDPR: Usar Google UMP (User Messaging Platform) antes del primer anuncio:
  *   import { AdsConsent } from 'react-native-google-mobile-ads';
  *   await AdsConsent.requestInfoUpdate({ tagForUnderAgeOfConsent: false });
  *
- * PLAN EMPRESA: Límite 25 empleados
+ * PLAN EMPRESA: Límite 30 empleados
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 
 // ─── Constantes de seguridad ──────────────────────────────────
-const MAX_EMPLOYEES = 25;        // Plan empresa: máx empleados
+const MAX_EMPLOYEES = 30;        // Plan empresa: máx empleados
+const MAX_GROUPS = 8;            // Máx grupos de trabajo por empresa
 const MAX_NOTE_LEN  = 500;       // Máx caracteres en notas
 const MAX_NAME_LEN  = 50;        // Máx caracteres en nombres
 const MAX_CAL_NAME  = 30;        // Máx caracteres en nombre de calendario
@@ -31,6 +33,7 @@ const DEFAULT_DAY_BANKS = { vacation:22, personal:2, comp:0 };
 const DEFAULT_NOTIF_CFG = { weekly:true, monthly:true, nextShift:true };
 const DEMO_PROFILE = { name:"Perfil local", email:"demo@turnosapp.local", provider:"demo-local" };
 const BILLING_READY = false;
+const PLAN_IDS = ["basic", "premium", "business"];
 
 // ─── Sanitización ────────────────────────────────────────────
 const sanitize = (str, max = MAX_NOTE_LEN) => {
@@ -113,6 +116,11 @@ const fmtKey  = (y,m,d) => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padS
 const genId   = () => `id_${randomToken(10, "abcdefghijklmnopqrstuvwxyz0123456789")}`;
 const genCode = () => `TUR-${randomToken(4)}`;
 const genViewCode = () => `VER-${randomToken(4)}`;
+const addDays = (date, days) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
 const escapeIcsText = (value) => String(value ?? "")
   .replace(/\\/g, "\\\\")
   .replace(/\r?\n/g, "\\n")
@@ -127,14 +135,30 @@ const nextDateStamp = (key) => {
 // ─── Storage (con manejo de errores robusto) ──────────────────
 async function sLoad(k, fb) {
   try {
-    const r = await window.storage.get(k);
-    if (!r) return fb;
-    const parsed = JSON.parse(r.value);
+    if (typeof window === "undefined") return fb;
+    if (window.storage?.get) {
+      const r = await window.storage.get(k);
+      if (!r) return fb;
+      const parsed = JSON.parse(r.value);
+      return parsed ?? fb;
+    }
+    const raw = window.localStorage?.getItem(k);
+    if (!raw) return fb;
+    const parsed = JSON.parse(raw);
     return parsed ?? fb;
   } catch { return fb; }
 }
 async function sSave(k, v) {
-  try { await window.storage.set(k, JSON.stringify(v)); return true; }
+  try {
+    if (typeof window === "undefined") return false;
+    const serialized = JSON.stringify(v);
+    if (window.storage?.set) {
+      await window.storage.set(k, serialized);
+      return true;
+    }
+    window.localStorage?.setItem(k, serialized);
+    return true;
+  }
   catch (e) { console.warn("Storage error:", e); return false; }
 }
 
@@ -180,10 +204,26 @@ const normalizeCompany = (value) => {
       shift: typeof member?.shift === "string" ? member.shift : null,
     })).filter(member => member.name).slice(0, MAX_EMPLOYEES) : [],
     swaps: Array.isArray(value.swaps) ? value.swaps.map(req => ({
+      id: typeof req?.id === "string" && req.id ? req.id : genId(),
       from: sanitize(req?.from || "", MAX_NAME_LEN),
       to: sanitize(req?.to || "", MAX_NAME_LEN),
       date: sanitize(req?.date || "", 20),
+      status: ["pending", "approved", "rejected"].includes(req?.status) ? req.status : "pending",
+      group: sanitize(req?.group || "", MAX_NAME_LEN),
+      note: sanitize(req?.note || "", 120),
+      reviewedAt: sanitize(req?.reviewedAt || "", 20),
     })).filter(req => req.from && req.to) : [],
+    groups: Array.isArray(value.groups) ? value.groups.map(group => ({
+      id: typeof group?.id === "string" && group.id ? group.id : genId(),
+      name: sanitize(group?.name || "Grupo", MAX_NAME_LEN),
+      members: Array.isArray(group?.members) ? group.members.map(member => sanitize(member, MAX_NAME_LEN)).filter(Boolean).slice(0, MAX_EMPLOYEES) : [],
+    })).filter(group => group.name).slice(0, MAX_GROUPS) : [],
+    history: Array.isArray(value.history) ? value.history.map(item => ({
+      id: typeof item?.id === "string" && item.id ? item.id : genId(),
+      type: sanitize(item?.type || "info", 20),
+      text: sanitize(item?.text || "", 160),
+      date: sanitize(item?.date || "", 20),
+    })).filter(item => item.text).slice(0, 60) : [],
   };
 };
 
@@ -241,7 +281,7 @@ const normalizeBackupData = (value) => {
     calIdx: Math.min(sanitizeNum(value?.calIdx, 0, calendars.length - 1), calendars.length - 1),
     cfg: normalizeCfg(value?.cfg, customShifts),
     customShifts,
-    plan: ["free", "premium", "business"].includes(value?.plan) ? value.plan : "free",
+    plan: value?.plan === "free" ? "basic" : (PLAN_IDS.includes(value?.plan) ? value.plan : "basic"),
     company: normalizeCompany(value?.company),
     userInfo: normalizeUserInfo(value?.userInfo),
     contractH: sanitizeNum(value?.contractH, 0, MAX_HOURS_MONTH),
@@ -294,7 +334,7 @@ export default function App() {
   // ── Config global ──
   const [cfg,           setCfg]          = useState(DEFAULT_CFG);
   const [customShifts,  setCustomShifts] = useState([]);
-  const [plan,          setPlan]         = useState("free");
+  const [plan,          setPlan]         = useState("basic");
   const [company,       setCompany]      = useState(null);
   const [userInfo,      setUserInfo]     = useState(null);
   const [contractH,     setContractH]    = useState(160);
@@ -317,7 +357,7 @@ export default function App() {
   const calsRef = useRef(calendars);
   useEffect(() => { calsRef.current = calendars; }, [calendars]);
 
-  const isPro    = plan !== "free";
+  const isPro    = plan === "premium" || plan === "business";
   const T        = darkMode ? DARK : LIGHT;
   const MAX_CALS = isPro ? 3 : 1;
 
@@ -409,7 +449,8 @@ export default function App() {
       const savedCustomShifts = Array.isArray(rawCustomShifts) ? rawCustomShifts.map(normalizeCustomShift) : [];
       setCustomShifts(savedCustomShifts);
       setCfg(normalizeCfg(await sLoad("sc10", DEFAULT_CFG), savedCustomShifts));
-      setPlan(        await sLoad("pl10", "free"));
+      const savedPlan = await sLoad("pl10", "basic");
+      setPlan(savedPlan === "free" ? "basic" : savedPlan);
       setCompany(     normalizeCompany(await sLoad("co10", null)));
       setUserInfo(    normalizeUserInfo(await sLoad("ui10", null)));
       setContractH(sanitizeNum(await sLoad("ch10", 160), 0, MAX_HOURS_MONTH));
@@ -577,7 +618,7 @@ export default function App() {
 
       {/* ── BANNER ADMOB (placeholder) ──
            En React Native reemplazar por:
-           <BannerAd unitId="ca-app-pub-3485168250647378~XXXXXXXXXX" size={BannerAdSize.BANNER}/>
+           <BannerAd unitId="ca-app-pub-3485168250647378/6442959343" size={BannerAdSize.BANNER}/>
            Requiere consentimiento GDPR antes del primer render ── */}
       {!isPro && (
         <div style={{position:"fixed",bottom:56,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:T.header,borderTop:`1px solid ${T.border}`,padding:"7px 14px",display:"flex",alignItems:"center",gap:8,zIndex:40}}>
@@ -649,34 +690,72 @@ function OnboardingModal({step, setStep, onDone, T}) {
 // CALENDAR TAB
 // ─────────────────────────────────────────────────────────────
 function CalendarTab({yr,mo,daysInMo,startOff,shifts,evs,notes,paint,togglePaint,handleDayTap,moStats,now,setNow,showHols,isPro,needsPro,setModal,streak,T,allShifts,calColor,exportPDF}) {
+  const [viewMode, setViewMode] = useState("month");
   const cells = [];
   for (let i=0; i<startOff; i++) cells.push(null);
   for (let d=1; d<=daysInMo; d++) cells.push(d);
   while (cells.length%7 !== 0) cells.push(null);
   const td = new Date(), todayKey = fmtKey(td.getFullYear(), td.getMonth(), td.getDate());
+  const weekStart = (() => {
+    const current = new Date(now);
+    const dow = current.getDay() === 0 ? 7 : current.getDay();
+    return addDays(current, -(dow - 1));
+  })();
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
-  // Swipe en la cuadrícula → cambiar mes
-  const calSwipe = useSwipe({ onLeft:()=>setNow(new Date(yr,mo+1,1)), onRight:()=>setNow(new Date(yr,mo-1,1)) });
+  const movePrev = () => setNow(viewMode === "week" ? addDays(now, -7) : new Date(yr,mo-1,1));
+  const moveNext = () => setNow(viewMode === "week" ? addDays(now, 7) : new Date(yr,mo+1,1));
+  const moveToday = () => setNow(new Date());
+
+  // Swipe en la cuadrícula → cambiar mes/semana
+  const calSwipe = useSwipe({ onLeft: moveNext, onRight: movePrev });
 
   const paintCards = allShifts.map(s => ({
     sid:s.id, label:s.label, icon:s.icon, color:s.color, bg:s.bg,
     val: ({morning:moStats.mornings,afternoon:moStats.afternoons,night:moStats.nights,rest:moStats.rests,vacation:moStats.vacations,personal:moStats.personals,comp:moStats.comps,sick:moStats.sick,extra:moStats.extra})[s.id] ?? 0,
   }));
 
+  const renderDayCell = (dateObj, idx) => {
+    if (!dateObj) return <div key={`e${idx}`}/>;
+    const key = fmtKey(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+    const sid = shifts[key];
+    const sh = allShifts.find(s=>s.id===sid);
+    const isToday = key === todayKey;
+    const isWeekend = [0,6].includes(dateObj.getDay());
+    const isHoliday = showHols && !!HOLIDAYS[key];
+    const dayEvs = evs[key] || [];
+    const hasNote = !!notes[key];
+    return (
+      <button key={key} onClick={()=>handleDayTap(key)} style={{height:viewMode==="week"?88:64,border:isToday?`2px solid ${calColor}`:isHoliday?"1px solid #F87171":`1px solid ${T.border}`,borderRadius:10,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"space-between",padding:"4px 2px 3px",cursor:"pointer",position:"relative",background:sh?sh.bg:T.card,outline:"none"}}>
+        {hasNote && <div style={{position:"absolute",top:3,right:3,width:5,height:5,borderRadius:"50%",background:"#6366F1",flexShrink:0}}/>}
+        {viewMode==="week" && <span style={{fontSize:8,color:isWeekend?"#F472B6":T.faint,fontWeight:700}}>{["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"][dateObj.getDay()===0?6:dateObj.getDay()-1]}</span>}
+        <span style={{fontSize:10,fontWeight:800,color:sh?sh.color:isHoliday?"#F87171":isWeekend?"#F472B6":T.dim,lineHeight:1}}>{dateObj.getDate()}</span>
+        <span style={{fontSize:viewMode==="week"?18:15,lineHeight:1}}>{sh?sh.icon:"·"}</span>
+        <div style={{display:"flex",gap:1,flexWrap:"wrap",justifyContent:"center",minHeight:14}}>
+          {dayEvs.slice(0,4).map((ev,i) => { const et=EVENTS.find(e=>e.id===ev.type); return et?<span key={i} style={{fontSize:10,lineHeight:1}}>{et.icon}</span>:null; })}
+        </div>
+      </button>
+    );
+  };
+
+  const periodLabel = viewMode === "week"
+    ? `${weekDays[0].getDate()} ${MONTHS_S[weekDays[0].getMonth()]} - ${weekDays[6].getDate()} ${MONTHS_S[weekDays[6].getMonth()]}`
+    : MONTHS[mo];
+
   return (
     <div style={{paddingBottom:8}}>
-      {/* Nav mes */}
+      {/* Nav periodo */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"13px 18px 8px"}}>
-        <button onClick={()=>setNow(new Date(yr,mo-1,1))} style={{background:T.card,border:`1px solid ${T.border}`,color:T.sub,width:36,height:36,borderRadius:10,cursor:"pointer",fontSize:18}}>‹</button>
+        <button onClick={movePrev} style={{background:T.card,border:`1px solid ${T.border}`,color:T.sub,width:36,height:36,borderRadius:10,cursor:"pointer",fontSize:18}}>‹</button>
         <div style={{textAlign:"center"}}>
-          <div style={{fontWeight:800,fontSize:20,color:T.text}}>{MONTHS[mo]}</div>
+          <div style={{fontWeight:800,fontSize:20,color:T.text}}>{periodLabel}</div>
           <div style={{fontSize:12,color:T.dim}}>{yr}</div>
         </div>
-        <button onClick={()=>setNow(new Date(yr,mo+1,1))} style={{background:T.card,border:`1px solid ${T.border}`,color:T.sub,width:36,height:36,borderRadius:10,cursor:"pointer",fontSize:18}}>›</button>
+        <button onClick={moveNext} style={{background:T.card,border:`1px solid ${T.border}`,color:T.sub,width:36,height:36,borderRadius:10,cursor:"pointer",fontSize:18}}>›</button>
       </div>
 
       {/* Strip superior */}
-      <div style={{display:"flex",gap:7,padding:"0 14px 10px",alignItems:"center"}}>
+      <div style={{display:"flex",gap:7,padding:"0 14px 10px",alignItems:"center",flexWrap:"wrap"}}>
         <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:10,padding:"7px 12px",display:"flex",alignItems:"center",gap:6}}>
           <span style={{fontSize:15}}>⏱</span>
           <div><div style={{fontWeight:800,fontSize:17,lineHeight:1,color:T.text}}>{moStats.h}</div><div style={{fontSize:9,color:T.faint}}>horas</div></div>
@@ -687,7 +766,15 @@ function CalendarTab({yr,mo,daysInMo,startOff,shifts,evs,notes,paint,togglePaint
         {moStats.overtime > 0 && <div style={{background:"#1E1B4B",border:"1px solid #818CF8",borderRadius:10,padding:"7px 10px",display:"flex",alignItems:"center",gap:5}}>
           <span style={{fontSize:13}}>⚡</span><div><div style={{fontWeight:800,fontSize:14,color:"#818CF8",lineHeight:1}}>+{moStats.overtime}h</div><div style={{fontSize:8,color:"#818CF880"}}>extra</div></div>
         </div>}
-        <div style={{marginLeft:"auto",display:"flex",gap:5}}>
+        <div style={{marginLeft:"auto",display:"flex",gap:5,alignItems:"center"}}>
+          <div style={{display:"flex",background:T.card,border:`1px solid ${T.border}`,borderRadius:10,padding:3}}>
+            {[{id:"month",label:"Mes"},{id:"week",label:"Semana"}].map(item => (
+              <button key={item.id} onClick={()=>setViewMode(item.id)} style={{background:viewMode===item.id?"#6366F1":"transparent",border:"none",color:viewMode===item.id?"white":T.dim,padding:"5px 8px",borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:700}}>
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <button onClick={moveToday} title="Ir a hoy" style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:8,padding:"6px 8px",cursor:"pointer",fontSize:11,color:T.sub,fontWeight:700}}>Hoy</button>
           <button onClick={()=>setModal("patterns")} title="Patrón automático" style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:8,padding:"6px 8px",cursor:"pointer",fontSize:12,color:T.sub,display:"flex",alignItems:"center",gap:2}}>🔄{!isPro&&<span style={{fontSize:7,color:"#818CF8",fontWeight:700}}>PRO</span>}</button>
           <button onClick={exportPDF} title="Exportar PDF" style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:8,padding:"6px 8px",cursor:"pointer",fontSize:12,color:T.sub,display:"flex",alignItems:"center",gap:2}}>📄{!isPro&&<span style={{fontSize:7,color:"#818CF8",fontWeight:700}}>PRO</span>}</button>
           <button onClick={()=>setModal("shiftCfg")} title="Config horas" style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:8,padding:"6px 8px",cursor:"pointer",fontSize:12,color:T.sub}}>⚙️</button>
@@ -711,34 +798,24 @@ function CalendarTab({yr,mo,daysInMo,startOff,shifts,evs,notes,paint,togglePaint
         ); })}
       </div>
 
-      {/* Nombres de día */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",padding:"0 10px",marginBottom:3}}>
-        {["L","M","X","J","V","S","D"].map((d,i) => <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:i>=5?"#F472B6":T.faint,padding:"3px 0"}}>{d}</div>)}
-      </div>
+      {viewMode==="month" && (
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",padding:"0 10px",marginBottom:3}}>
+            {["L","M","X","J","V","S","D"].map((d,i) => <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:i>=5?"#F472B6":T.faint,padding:"3px 0"}}>{d}</div>)}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,padding:"0 10px"}} {...calSwipe}>
+            {cells.map((day, idx) => day ? renderDayCell(new Date(yr, mo, day), idx) : <div key={`e${idx}`}/>)}
+          </div>
+        </>
+      )}
 
-      {/* Cuadrícula del calendario – swipe para cambiar mes */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,padding:"0 10px"}} {...calSwipe}>
-        {cells.map((day, idx) => {
-          if (!day) return <div key={`e${idx}`}/>;
-          const key = fmtKey(yr, mo, day);
-          const sid = shifts[key]; const sh = allShifts.find(s=>s.id===sid);
-          const isToday   = key === todayKey;
-          const isWeekend = [0,6].includes(new Date(yr,mo,day).getDay());
-          const isHoliday = showHols && !!HOLIDAYS[key];
-          const dayEvs    = evs[key] || [];
-          const hasNote   = !!notes[key];
-          return (
-            <button key={key} onClick={()=>handleDayTap(key)} style={{height:64,border:isToday?`2px solid ${calColor}`:isHoliday?"1px solid #F87171":`1px solid ${T.border}`,borderRadius:10,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"space-between",padding:"4px 2px 3px",cursor:"pointer",position:"relative",background:sh?sh.bg:T.card,outline:"none"}}>
-              {hasNote && <div style={{position:"absolute",top:3,right:3,width:5,height:5,borderRadius:"50%",background:"#6366F1",flexShrink:0}}/>}
-              <span style={{fontSize:10,fontWeight:800,color:sh?sh.color:isHoliday?"#F87171":isWeekend?"#F472B6":T.dim,lineHeight:1}}>{day}</span>
-              <span style={{fontSize:15,lineHeight:1}}>{sh?sh.icon:"·"}</span>
-              <div style={{display:"flex",gap:1,flexWrap:"wrap",justifyContent:"center",minHeight:14}}>
-                {dayEvs.slice(0,4).map((ev,i) => { const et=EVENTS.find(e=>e.id===ev.type); return et?<span key={i} style={{fontSize:10,lineHeight:1}}>{et.icon}</span>:null; })}
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      {viewMode==="week" && (
+        <div style={{padding:"0 10px"}} {...calSwipe}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}}>
+            {weekDays.map((dateObj, idx) => renderDayCell(dateObj, idx))}
+          </div>
+        </div>
+      )}
 
       {showHols && <div style={{padding:"10px 14px 0",display:"flex",alignItems:"center",gap:6}}>
         <div style={{width:10,height:10,borderRadius:2,border:"1px solid #F87171",background:"#450A0A20",flexShrink:0}}/>
@@ -1093,23 +1170,31 @@ function AnnualSummaryModal({onClose,yr,calcAnnualStats,calcMonthStats,isPro,nee
 }
 
 // ─────────────────────────────────────────────────────────────
-// COMPANY TAB  (máx 25 empleados, cambios de turno)
+// COMPANY TAB  (máx 30 empleados, cambios de turno)
 // ─────────────────────────────────────────────────────────────
 function CompanyTab({company,setCompany,plan,needsPro,sSave,toast,T}) {
   const [members,   setMembers]   = useState(company?.members || []);
   const [swaps,     setSwaps]     = useState(company?.swaps   || []);
+  const [groups,    setGroups]    = useState(company?.groups  || []);
+  const [history,   setHistory]   = useState(company?.history || []);
   const [newMember, setNewMember] = useState("");
+  const [newRole,   setNewRole]   = useState("");
   const [joinCode,  setJoinCode]  = useState("");
   const [view,      setView]      = useState("boss");
   const [swapFrom,  setSwapFrom]  = useState("");
   const [swapTo,    setSwapTo]    = useState("");
+  const [swapNote,  setSwapNote]  = useState("");
+  const [groupName, setGroupName] = useState("");
+  const [groupPeople, setGroupPeople] = useState("");
 
   useEffect(() => { setMembers(company?.members || []); }, [company?.members]);
   useEffect(() => { setSwaps(company?.swaps || []); }, [company?.swaps]);
+  useEffect(() => { setGroups(company?.groups || []); }, [company?.groups]);
+  useEffect(() => { setHistory(company?.history || []); }, [company?.history]);
   useEffect(() => {
     if (plan !== "business") return;
     const normalized = normalizeCompany(company || { name:"Mi Empresa" });
-    const needsHydration = !company || company.code !== normalized.code || !Array.isArray(company.members) || !Array.isArray(company.swaps);
+    const needsHydration = !company || company.code !== normalized.code || !Array.isArray(company.members) || !Array.isArray(company.swaps) || !Array.isArray(company.groups) || !Array.isArray(company.history);
     if (!needsHydration) return;
     setCompany(normalized);
     sSave("co10", normalized);
@@ -1142,18 +1227,24 @@ function CompanyTab({company,setCompany,plan,needsPro,sSave,toast,T}) {
 
   const addMember = async () => {
     const name = sanitize(newMember, MAX_NAME_LEN);
+    const role = sanitize(newRole, 24) || "Empleado";
     if (!name) { toast("⚠️ Introduce un nombre"); return; }
     if (members.length >= MAX_EMPLOYEES) { toast(`⚠️ Límite de ${MAX_EMPLOYEES} empleados alcanzado`); return; }
     if (members.some(member => member.name.toLowerCase() === name.toLowerCase())) { toast("⚠️ Ese empleado ya existe"); return; }
-    const m = [...members, {name, role:"Empleado", shift:null}];
-    setMembers(m); setNewMember("");
-    const c = {...company, members:m}; setCompany(c); await sSave("co10", c);
+    const m = [...members, {name, role, shift:null}];
+    setMembers(m); setNewMember(""); setNewRole("");
+    const nextHistory = [{ id:genId(), type:"member", text:`Añadido ${name}${role && role !== "Empleado" ? ` (${role})` : ""} al equipo`, date:new Date().toLocaleDateString("es") }, ...history].slice(0, 60);
+    setHistory(nextHistory);
+    const c = {...company, members:m, history:nextHistory}; setCompany(c); await sSave("co10", c);
   };
 
   const approveSwap = async (i, ok) => {
     const upd = swaps.filter((_,idx)=>idx!==i);
     setSwaps(upd);
-    const c = {...company, swaps:upd}; setCompany(c); await sSave("co10", c);
+    const req = swaps[i];
+    const nextHistory = [{ id:genId(), type:"swap", text:`${ok?"Aprobado":"Rechazado"} cambio ${req?.from || ""} ↔ ${req?.to || ""}`, date:new Date().toLocaleDateString("es") }, ...history].slice(0, 60);
+    setHistory(nextHistory);
+    const c = {...company, swaps:upd, history:nextHistory}; setCompany(c); await sSave("co10", c);
     toast(ok ? "✅ Cambio aprobado" : "✕ Cambio rechazado");
   };
 
@@ -1161,10 +1252,28 @@ function CompanyTab({company,setCompany,plan,needsPro,sSave,toast,T}) {
     const f = sanitize(swapFrom, MAX_NAME_LEN), t2 = sanitize(swapTo, MAX_NAME_LEN);
     if (!f || !t2) { toast("⚠️ Rellena ambos campos"); return; }
     if (f.toLowerCase() === t2.toLowerCase()) { toast("⚠️ El cambio debe ser entre dos personas distintas"); return; }
-    const req = {from:f, to:t2, date:new Date().toLocaleDateString("es")};
+    const req = {id:genId(), from:f, to:t2, date:new Date().toLocaleDateString("es"), status:"pending", note:sanitize(swapNote, 120), group:""};
     const upd = [...swaps, req]; setSwaps(upd);
-    const c = {...company, swaps:upd}; setCompany(c); await sSave("co10", c);
-    toast("📤 Solicitud enviada al jefe"); setSwapFrom(""); setSwapTo("");
+    const nextHistory = [{ id:genId(), type:"swap", text:`Solicitud de cambio ${f} ↔ ${t2}`, date:new Date().toLocaleDateString("es") }, ...history].slice(0, 60);
+    setHistory(nextHistory);
+    const c = {...company, swaps:upd, history:nextHistory}; setCompany(c); await sSave("co10", c);
+    toast("📤 Solicitud enviada al jefe"); setSwapFrom(""); setSwapTo(""); setSwapNote("");
+  };
+
+  const addGroup = async () => {
+    const name = sanitize(groupName, MAX_NAME_LEN);
+    const picked = groupPeople.split(",").map(p => sanitize(p, MAX_NAME_LEN)).filter(Boolean);
+    if (!name) { toast("⚠️ Pon nombre al grupo"); return; }
+    if (groups.length >= MAX_GROUPS) { toast(`⚠️ Límite de ${MAX_GROUPS} grupos alcanzado`); return; }
+    const validMembers = picked.filter(memberName => members.some(member => member.name.toLowerCase() === memberName.toLowerCase()));
+    const nextGroups = [...groups, { id:genId(), name, members:validMembers }];
+    setGroups(nextGroups);
+    setGroupName("");
+    setGroupPeople("");
+    const nextHistory = [{ id:genId(), type:"group", text:`Creado grupo ${name}${validMembers.length?` (${validMembers.length} miembros)`:""}`, date:new Date().toLocaleDateString("es") }, ...history].slice(0, 60);
+    setHistory(nextHistory);
+    const c = {...company, groups:nextGroups, history:nextHistory}; setCompany(c); await sSave("co10", c);
+    toast("✅ Grupo creado");
   };
 
   const copyInviteCode = async () => {
@@ -1200,7 +1309,7 @@ function CompanyTab({company,setCompany,plan,needsPro,sSave,toast,T}) {
 
       {/* Tabs */}
       <div style={{display:"flex",background:T.card,border:`1px solid ${T.border}`,borderRadius:10,padding:3,marginBottom:12}}>
-        {[{id:"boss",l:"Panel jefe"},{id:"swap",l:"Cambios"},{id:"worker",l:"Unirse"}].map(v => (
+        {[{id:"boss",l:"Panel jefe"},{id:"swap",l:"Cambios"},{id:"groups",l:"Grupos"},{id:"history",l:"Historial"},{id:"worker",l:"Unirse"}].map(v => (
           <button key={v.id} onClick={()=>setView(v.id)} style={{flex:1,padding:"7px",border:"none",borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:11,background:view===v.id?"#6366F1":"transparent",color:view===v.id?"white":T.dim}}>{v.l}</button>
         ))}
       </div>
@@ -1218,7 +1327,10 @@ function CompanyTab({company,setCompany,plan,needsPro,sSave,toast,T}) {
           ); })}
         </div>
         <div style={{display:"flex",gap:8}}>
-          <input value={newMember} onChange={e=>setNewMember(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMember()} placeholder="Nombre del empleado" maxLength={MAX_NAME_LEN} style={{flex:1,background:T.card,border:`1px solid ${T.border2}`,borderRadius:10,color:T.text,padding:"10px 12px",fontSize:13,outline:"none"}}/>
+          <div style={{flex:1,display:"grid",gap:8}}>
+            <input value={newMember} onChange={e=>setNewMember(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMember()} placeholder="Nombre del empleado" maxLength={MAX_NAME_LEN} style={{width:"100%",background:T.card,border:`1px solid ${T.border2}`,borderRadius:10,color:T.text,padding:"10px 12px",fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+            <input value={newRole} onChange={e=>setNewRole(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMember()} placeholder="Rol o área (opcional)" maxLength={24} style={{width:"100%",background:T.card,border:`1px solid ${T.border2}`,borderRadius:10,color:T.text,padding:"10px 12px",fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+          </div>
           <button onClick={addMember} style={{background:"#6366F1",border:"none",color:"white",padding:"10px 16px",borderRadius:10,cursor:"pointer",fontWeight:700}}>+</button>
         </div>
       </>}
@@ -1239,8 +1351,35 @@ function CompanyTab({company,setCompany,plan,needsPro,sSave,toast,T}) {
           <div style={{fontWeight:700,fontSize:13,color:T.text,marginBottom:8}}>Solicitar cambio de turno</div>
           <input value={swapFrom} onChange={e=>setSwapFrom(e.target.value)} placeholder="Tu nombre" maxLength={MAX_NAME_LEN} style={{width:"100%",background:T.header,border:`1px solid ${T.border2}`,borderRadius:8,color:T.text,padding:"9px",fontSize:13,marginBottom:6,boxSizing:"border-box",outline:"none"}}/>
           <input value={swapTo} onChange={e=>setSwapTo(e.target.value)} placeholder="Compañero con quien cambias" maxLength={MAX_NAME_LEN} style={{width:"100%",background:T.header,border:`1px solid ${T.border2}`,borderRadius:8,color:T.text,padding:"9px",fontSize:13,marginBottom:10,boxSizing:"border-box",outline:"none"}}/>
+          <input value={swapNote} onChange={e=>setSwapNote(e.target.value)} placeholder="Nota opcional" maxLength={120} style={{width:"100%",background:T.header,border:`1px solid ${T.border2}`,borderRadius:8,color:T.text,padding:"9px",fontSize:13,marginBottom:10,boxSizing:"border-box",outline:"none"}}/>
           <button onClick={requestSwap} style={{width:"100%",background:"linear-gradient(135deg,#6366F1,#A78BFA)",border:"none",color:"white",padding:"11px",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:14}}>Enviar solicitud al jefe</button>
         </div>
+      </div>}
+
+      {view==="groups" && <div>
+        <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:"14px",marginBottom:10}}>
+          <div style={{fontWeight:700,fontSize:13,color:T.text,marginBottom:8}}>Crear grupo de trabajo</div>
+          <input value={groupName} onChange={e=>setGroupName(e.target.value)} placeholder="Nombre del grupo" maxLength={MAX_NAME_LEN} style={{width:"100%",background:T.header,border:`1px solid ${T.border2}`,borderRadius:8,color:T.text,padding:"9px",fontSize:13,marginBottom:6,boxSizing:"border-box",outline:"none"}}/>
+          <input value={groupPeople} onChange={e=>setGroupPeople(e.target.value)} placeholder="Miembros separados por coma" style={{width:"100%",background:T.header,border:`1px solid ${T.border2}`,borderRadius:8,color:T.text,padding:"9px",fontSize:13,marginBottom:10,boxSizing:"border-box",outline:"none"}}/>
+          <button onClick={addGroup} style={{width:"100%",background:"linear-gradient(135deg,#6366F1,#A78BFA)",border:"none",color:"white",padding:"11px",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:14}}>Guardar grupo</button>
+        </div>
+        {groups.length===0 && <div style={{textAlign:"center",color:T.faint,fontSize:13,padding:"16px 0"}}>Aún no hay grupos creados</div>}
+        {groups.map(group => (
+          <div key={group.id} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px",marginBottom:8}}>
+            <div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:4}}>{group.name}</div>
+            <div style={{fontSize:11,color:T.dim}}>{group.members.length ? group.members.join(", ") : "Sin miembros asignados todavía"}</div>
+          </div>
+        ))}
+      </div>}
+
+      {view==="history" && <div>
+        {history.length===0 && <div style={{textAlign:"center",color:T.faint,fontSize:13,padding:"16px 0"}}>Todavía no hay actividad registrada</div>}
+        {history.map(item => (
+          <div key={item.id} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px",marginBottom:8}}>
+            <div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:4}}>{item.text}</div>
+            <div style={{fontSize:11,color:T.dim}}>{item.date}</div>
+          </div>
+        ))}
       </div>}
 
       {view==="worker" && <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:"16px"}}>
@@ -1297,7 +1436,7 @@ function SettingsTab({plan,setPlan,setPaywall,sSave,cfg,setCfg,isPro,needsPro,se
 
       {/* Suscripción */}
       <div style={{background:"linear-gradient(135deg,#1E1B4B,#312E81)",border:"1px solid #4338CA",borderRadius:14,padding:"14px",marginBottom:12}}>
-        {plan === "free" ? (
+        {plan === "basic" ? (
           <>
             <div style={{fontWeight:800,fontSize:15,marginBottom:4,color:"white"}}>✨ Hazte PRO</div>
             <div style={{color:"#A5B4FC",fontSize:12,marginBottom:10}}>Sin anuncios · Todas las funciones desbloqueadas</div>
@@ -1317,7 +1456,7 @@ function SettingsTab({plan,setPlan,setPaywall,sSave,cfg,setCfg,isPro,needsPro,se
           <>
             <div style={{fontWeight:800,fontSize:15,marginBottom:2,color:"white"}}>{plan==="business"?"🏢 Empresa":"✨ PRO"} activo</div>
             <div style={{color:"#A5B4FC",fontSize:12,marginBottom:10}}>{BILLING_READY ? "Suscripción gestionada por la tienda" : "Activación local de prueba"}</div>
-            <button onClick={async()=>{setPlan("free");await sSave("pl10","free");toast("Suscripción cancelada");}} style={{background:"transparent",border:"1px solid #475569",color:"#EF4444",padding:"8px 16px",borderRadius:10,cursor:"pointer",fontSize:12}}>Cancelar suscripción</button>
+            <button onClick={async()=>{setPlan("basic");await sSave("pl10","basic");toast("Suscripción cancelada");}} style={{background:"transparent",border:"1px solid #475569",color:"#EF4444",padding:"8px 16px",borderRadius:10,cursor:"pointer",fontSize:12}}>Cancelar suscripción</button>
           </>
         )}
       </div>
@@ -1401,7 +1540,7 @@ function CalendarManagerModal({onClose,calendars,setCalendars,calIdx,setCalIdx,i
       <div onClick={e=>e.stopPropagation()} style={{background:T.header,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:430,margin:"0 auto",padding:"16px 16px 40px",border:`1px solid ${T.border}`,maxHeight:"80vh",overflowY:"auto"}}>
         <div {...swipe} style={{textAlign:"center",padding:"0 0 10px",cursor:"grab"}}><div style={{width:40,height:4,background:T.border2,borderRadius:2,margin:"0 auto"}}/></div>
         <div style={{fontWeight:800,fontSize:16,marginBottom:4,color:T.text}}>📅 Mis calendarios</div>
-        <div style={{color:T.dim,fontSize:12,marginBottom:14}}>{isPro?`${calendars.length}/3 calendarios PRO`:"Plan gratuito: 1 calendario · PRO para hasta 3"}</div>
+        <div style={{color:T.dim,fontSize:12,marginBottom:14}}>{isPro?`${calendars.length}/3 calendarios PRO`:"Plan básico: 1 calendario · Premium para hasta 3"}</div>
         {calendars.map((c,i) => (
           <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 14px",marginBottom:8}}>
             <div style={{width:28,height:28,borderRadius:"50%",background:c.color,flexShrink:0}}/>
@@ -1552,11 +1691,13 @@ function ShiftCfgModal({cfg,setCfg,onClose,sSave,toast,T}) {
 // PAYWALL
 // ─────────────────────────────────────────────────────────────
 function PaywallModal({feat,onClose,setPlan,sSave,toast,T}) {
-  const [sel,setSel]=useState("annual");
+  const companyIntent = (feat || "").toLowerCase().includes("empresa");
+  const [sel,setSel]=useState(companyIntent ? "business" : "annual");
   const activate = async () => {
-    setPlan("premium");
-    await sSave("pl10", "premium");
-    toast(BILLING_READY ? "✅ ¡Bienvenido a PRO!" : "✅ PRO activado en modo demo. Falta conectar el cobro real antes de publicar.");
+    const nextPlan = sel === "business" ? "business" : "premium";
+    setPlan(nextPlan);
+    await sSave("pl10", nextPlan);
+    toast(BILLING_READY ? `✅ ¡Bienvenido a ${nextPlan==="business"?"Empresa":"PRO"}!` : `✅ ${nextPlan==="business"?"Plan Empresa":"PRO"} activado en modo demo. Falta conectar el cobro real antes de publicar.`);
     onClose();
   };
   return(
@@ -1565,15 +1706,15 @@ function PaywallModal({feat,onClose,setPlan,sSave,toast,T}) {
         <div style={{width:40,height:4,background:T.border2,borderRadius:2,margin:"0 auto 18px"}}/>
         <div style={{textAlign:"center",marginBottom:14}}>
           <div style={{fontSize:34,marginBottom:6}}>✨</div>
-          <div style={{fontWeight:800,fontSize:19,marginBottom:4,color:T.text}}>TurnosApp PRO</div>
-          {feat&&<div style={{color:T.dim,fontSize:12}}>Para usar <strong style={{color:"#818CF8"}}>{feat}</strong> necesitas PRO</div>}
+          <div style={{fontWeight:800,fontSize:19,marginBottom:4,color:T.text}}>TurnosApp {sel==="business"?"Empresa":"PRO"}</div>
+          {feat&&<div style={{color:T.dim,fontSize:12}}>Para usar <strong style={{color:"#818CF8"}}>{feat}</strong> necesitas {sel==="business"?"Empresa":"PRO"}</div>}
         </div>
-        {["✅ Sin anuncios","✅ Modo pintura + patrones automáticos","✅ Balance anual con gráficas","✅ Horas extra + bolsa de vacaciones","✅ Hasta 3 calendarios independientes","✅ PDF del cuadrante mensual","✅ Resumen anual tipo Wrapped","✅ Exportación iCal y futura sync","✅ Compartir con pareja o familia","✅ Turnos personalizados ilimitados"].map(f=>(
+        {[`✅ Sin anuncios`,`✅ Modo pintura + patrones automáticos`,`✅ Balance anual con gráficas`,`✅ Horas extra + bolsa de vacaciones`,`✅ Hasta 3 calendarios independientes`,`✅ PDF del cuadrante mensual`,`✅ Resumen anual tipo Wrapped`,`✅ Exportación iCal y futura sync`,`✅ Compartir con pareja o familia`,`✅ Turnos personalizados ilimitados`,`✅ Plan Empresa hasta ${MAX_EMPLOYEES} personas`].map(f=>(
           <div key={f} style={{fontSize:12,color:T.sub,padding:"3px 0"}}>{f}</div>
         ))}
-        <div style={{display:"flex",gap:8,margin:"16px 0"}}>
-          {[{id:"monthly",l:"Mensual",p:"1,99€",s:"/mes"},{id:"annual",l:"Anual",p:"14,99€",s:"/año · ahorra 37%"}].map(o=>(
-            <button key={o.id} onClick={()=>setSel(o.id)} style={{flex:1,background:sel===o.id?"#1E1B4B":T.card,border:`2px solid ${sel===o.id?"#6366F1":T.border}`,borderRadius:12,padding:"12px 6px",cursor:"pointer",textAlign:"center",transition:"all 0.2s"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,margin:"16px 0"}}>
+          {[{id:"monthly",l:"Mensual",p:"1,99€",s:"uso personal"},{id:"annual",l:"Anual",p:"14,99€",s:"ahorra 37%"},{id:"business",l:"Empresa",p:"9,99€/mes",s:`hasta ${MAX_EMPLOYEES} personas`}].map(o=>(
+            <button key={o.id} onClick={()=>setSel(o.id)} style={{background:sel===o.id?"#1E1B4B":T.card,border:`2px solid ${sel===o.id?"#6366F1":T.border}`,borderRadius:12,padding:"12px 6px",cursor:"pointer",textAlign:"center",transition:"all 0.2s"}}>
               <div style={{fontSize:10,color:T.dim,fontWeight:600}}>{o.l}</div>
               <div style={{fontWeight:800,fontSize:18,color:sel===o.id?"#818CF8":T.text,margin:"4px 0"}}>{o.p}</div>
               <div style={{fontSize:9,color:sel===o.id?"#6366F1":T.faint}}>{o.s}</div>
@@ -1581,9 +1722,9 @@ function PaywallModal({feat,onClose,setPlan,sSave,toast,T}) {
           ))}
         </div>
         {!BILLING_READY && <div style={{textAlign:"center",fontSize:11,color:"#F59E0B",marginBottom:10}}>Esta pantalla está en modo demo local. La compra real debe validarse en tienda.</div>}
-        <button onClick={activate} style={{width:"100%",background:"linear-gradient(135deg,#6366F1,#A78BFA)",border:"none",color:"white",padding:"13px",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,marginBottom:8}}>{BILLING_READY ? "Empezar 14 días gratis" : "Activar PRO de prueba"}</button>
-        <div style={{textAlign:"center",fontSize:10,color:T.faint,marginBottom:10}}>{BILLING_READY ? "Sin compromiso · Cancela desde Ajustes en cualquier momento" : "Las funciones premium se desbloquean solo para validar la interfaz"}</div>
-        <button onClick={onClose} style={{width:"100%",background:"none",border:"none",color:T.faint,cursor:"pointer",fontSize:12,padding:"6px"}}>Seguir con la versión gratuita</button>
+        <button onClick={activate} style={{width:"100%",background:"linear-gradient(135deg,#6366F1,#A78BFA)",border:"none",color:"white",padding:"13px",borderRadius:12,cursor:"pointer",fontWeight:800,fontSize:15,marginBottom:8}}>{BILLING_READY ? (sel==="business" ? "Probar Empresa 14 días" : "Empezar 14 días gratis") : (sel==="business" ? "Activar Empresa de prueba" : "Activar PRO de prueba")}</button>
+        <div style={{textAlign:"center",fontSize:10,color:T.faint,marginBottom:10}}>{BILLING_READY ? "Sin compromiso · Cancela desde Ajustes en cualquier momento" : `Las funciones ${sel==="business"?"del plan Empresa":"premium"} se desbloquean solo para validar la interfaz`}</div>
+        <button onClick={onClose} style={{width:"100%",background:"none",border:"none",color:T.faint,cursor:"pointer",fontSize:12,padding:"6px"}}>Seguir con la versión básica</button>
       </div>
     </div>
   );
@@ -1681,6 +1822,16 @@ function ShareModal({onClose,isPro,needsPro,toast,T}) {
   const [copied,setCopied]=useState(false);
   if(!isPro){needsPro("compartir calendario");onClose();return null;}
   const copy=async()=>{try{await navigator.clipboard.writeText(code);setCopied(true);setTimeout(()=>setCopied(false),2000);}catch{toast("Copia el código manualmente");}};
+  const shareWhatsapp = () => {
+    const text = encodeURIComponent(`Te comparto mi calendario de TurnosApp en modo solo lectura. Código: ${code}`);
+    const url = `https://wa.me/?text=${text}`;
+    try {
+      window.open(url, "_blank");
+      toast("📲 Abriendo WhatsApp…");
+    } catch {
+      toast("Copia el código manualmente");
+    }
+  };
   const swipe=useSwipe({onDown:onClose});
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",zIndex:150,display:"flex",alignItems:"flex-end"}} onClick={onClose}>
@@ -1694,7 +1845,7 @@ function ShareModal({onClose,isPro,needsPro,toast,T}) {
         </div>
         <div style={{display:"flex",gap:8}}>
           <button onClick={copy} style={{flex:1,background:T.card,border:`1px solid ${T.border2}`,color:T.sub,padding:"12px",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13}}>{copied?"✅ Copiado":"📋 Copiar código"}</button>
-          <button onClick={()=>toast("📲 Abriendo WhatsApp…")} style={{flex:1,background:"#064E3B",border:"1px solid #34D399",color:"#34D399",padding:"12px",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13}}>💬 WhatsApp</button>
+          <button onClick={shareWhatsapp} style={{flex:1,background:"#064E3B",border:"1px solid #34D399",color:"#34D399",padding:"12px",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13}}>💬 WhatsApp</button>
         </div>
       </div>
     </div>

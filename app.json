@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "TurnosApp",
+    "slug": "turnosapp",
+    "scheme": "turnosapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-web-browser",
+        {
+          "experimentalLauncherActivity": true
+        }
+      ],
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-3485168250647378~1198686158",
+          "iosAppId": ""
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.helmanticasoftware.turnosapp"
+    },
+    "android": {
+      "package": "com.helmanticasoftware.turnosapp",
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#0f172a"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "turnosapp-local"
+      }
+    }
+  }
+}
