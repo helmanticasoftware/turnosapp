@@ -327,7 +327,7 @@ function useSwipe({ onLeft, onRight, onDown, threshold=55, vertThreshold=80 } = 
 // ═══════════════════════════════════════════════════════════════
 // APP ROOT
 // ═══════════════════════════════════════════════════════════════
-export default function App() {
+export default function App({ externalUserInfo = null }) {
   // ── Multi-calendario ──
   const [calendars,     setCalendars]    = useState([]);
   const [calIdx,        setCalIdx]       = useState(0);
@@ -463,6 +463,21 @@ export default function App() {
       setLoaded(true);
     })();
   }, []);
+
+  useEffect(() => {
+    const nextExternalUser = normalizeUserInfo(externalUserInfo);
+    if (!nextExternalUser || nextExternalUser.provider === "demo-local") return;
+    setUserInfo(prev => {
+      const prevNormalized = normalizeUserInfo(prev);
+      const sameUser =
+        prevNormalized?.email === nextExternalUser.email &&
+        prevNormalized?.provider === nextExternalUser.provider &&
+        prevNormalized?.name === nextExternalUser.name;
+      if (sameUser) return prev;
+      sSave("ui10", nextExternalUser);
+      return nextExternalUser;
+    });
+  }, [externalUserInfo]);
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2800); };
   const needsPro  = (feat) => { if (isPro) return true; setPaywall({ show:true, feat }); return false; };
@@ -1432,6 +1447,9 @@ function SettingsTab({plan,setPlan,setPaywall,sSave,cfg,setCfg,isPro,needsPro,se
             </button>
           </>
         )}
+        {userInfo && userInfo.provider !== "demo-local" ? (
+          <div style={{color:"#94A3B8",fontSize:12,marginTop:10}}>Esta cuenta ya está conectada con Supabase y sincronización real.</div>
+        ) : null}
       </div>
 
       {/* Suscripción */}
@@ -1891,7 +1909,13 @@ function DataModal({onClose,buildBackupSnapshot,restoreBackupSnapshot,userInfo,s
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
           <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:"14px"}}>
             <div style={{fontWeight:700,fontSize:13,marginBottom:6,color:T.text}}>☁️ Perfil y sincronización</div>
-            <div style={{color:T.dim,fontSize:12,marginBottom:10}}>{userInfo?"Tienes un perfil local guardado. La sincronización real entre dispositivos requiere backend y auth reales.":"Aún no hay sincronización real conectada. Puedes guardar un perfil local mientras montamos Google/Firebase."}</div>
+            <div style={{color:T.dim,fontSize:12,marginBottom:10}}>
+              {userInfo
+                ? (userInfo.provider === "demo-local"
+                    ? "Tienes un perfil local guardado. La sincronización real entre dispositivos requiere backend y auth reales."
+                    : "Tu cuenta ya está conectada y lista para sincronización real con Supabase.")
+                : "Aún no hay sincronización real conectada. Puedes guardar un perfil local mientras montamos Google/Firebase."}
+            </div>
             {userInfo
               ?<div style={{display:"flex",alignItems:"center",gap:6,color:userInfo.provider==="demo-local"?"#F59E0B":"#34D399",fontSize:12,fontWeight:600}}><span>{userInfo.provider==="demo-local"?"•":"✓"}</span><span>{userInfo.email}</span></div>
               :<button onClick={loginGoogle} style={{width:"100%",background:T.header,border:`1px solid ${T.border}`,borderRadius:10,padding:"10px",display:"flex",alignItems:"center",justifyContent:"center",gap:8,cursor:"pointer"}}><span>🔑</span><span style={{fontWeight:700,fontSize:13,color:T.text}}>Guardar perfil local</span></button>}
